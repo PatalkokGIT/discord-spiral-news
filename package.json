@@ -1,0 +1,14 @@
+{
+  "name": "spiral-buddies-discord-api",
+  "version": "1.0.0",
+  "description": "Bot Discord qui expose les messages via API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  }
+}
