@@ -49,7 +49,7 @@ async function fetchMessages() {
       return;
     }
 
-    const messages = await channel.messages.fetch({ limit: 10 }); // Augmenté à 10
+    const messages = await channel.messages.fetch({ limit: 3 }); // Augmenté à 3
     
     cachedMessages = messages
       .map((m) => ({
