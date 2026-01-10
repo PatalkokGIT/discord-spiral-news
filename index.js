@@ -134,7 +134,7 @@ app.use(
     origin: [
       "https://www.spiral-buddies.fr",
       "https://spiral-buddies.fr",
-      "http://localhost:3000", // Pour tests en local
+      "https://spiral-buddies.youbieflix.synology.me"
     ],
     credentials: true,
   })
