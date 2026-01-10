@@ -10,271 +10,156 @@ const cors = require("cors");
 // ========== CONFIGURATION ==========
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID || process.env.DISCORD_CHANNEL_ID;
-const PORT = process.env.PORT || 10000; // Render utilise PORT dynamique
+const PORT = process.env.PORT || 10000;
 
 // ========== VALIDATION CRITIQUE ==========
 if (!BOT_TOKEN || !CHANNEL_ID) {
   console.error("❌ ERREUR CRITIQUE : Variables d'environnement manquantes!");
-  console.error("BOT_TOKEN:", BOT_TOKEN ? "✅ Défini" : "❌ MANQUANT");
-  console.error("CHANNEL_ID:", CHANNEL_ID ? "✅ Défini" : "❌ MANQUANT");
-  console.error("\n📋 Sur Render, configure ces variables dans Environment :");
-  console.error("   - BOT_TOKEN ou DISCORD_TOKEN");
-  console.error("   - CHANNEL_ID ou DISCORD_CHANNEL_ID");
-  process.exit(1); // Arrête l'app si config invalide
+  process.exit(1);
 }
 
-console.log("✅ Configuration validée");
-console.log("- Channel ID:", CHANNEL_ID);
-console.log("- Port:", PORT);
-
-// ========== CLIENT DISCORD ==========
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers, // AJOUT IMPORTANT POUR LES MEMBRES
   ],
 });
 
-// Variable pour stocker les messages en cache
 let cachedMessages = [];
 
 // ========== FONCTION : RÉCUPÉRATION DES MESSAGES ==========
 async function fetchMessages() {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    
-    if (!channel) {
-      console.error(`❌ Salon ${CHANNEL_ID} introuvable`);
-      return;
-    }
+    if (!channel) return;
 
-    const messages = await channel.messages.fetch({ limit: 3 }); // Augmenté à 3
-    
-    cachedMessages = messages
-      .map((m) => ({
-        id: m.id,
-        author: {
-          username: m.author.username,
-          avatar: m.author.displayAvatarURL({ format: "png", size: 128 }),
-          bot: m.author.bot,
-        },
-        content: m.content,
-        timestamp: m.createdTimestamp,
-        date: new Date(m.createdTimestamp).toLocaleString("fr-FR", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        embeds: m.embeds.map((e) => ({
-          title: e.title,
-          description: e.description,
-          image: e.image?.url,
-          thumbnail: e.thumbnail?.url,
-          color: e.color,
-          url: e.url,
-        })),
-        attachments: m.attachments.map((a) => ({
-          url: a.url,
-          name: a.name,
-          contentType: a.contentType,
-          size: a.size,
-        })),
-      }))
-      .reverse(); // Ordre chronologique (du plus ancien au plus récent)
+    // Récupérer la guilde (serveur) pour résoudre les membres
+    const guild = channel.guild;
 
-    console.log(`✅ ${cachedMessages.length} messages récupérés depuis Discord`);
+    const messages = await channel.messages.fetch({ limit: 5 }); // On prend 5 messages pour être sûr d'avoir du contenu
+
+    // Traitement asynchrone des messages pour résoudre les mentions
+    const processedMessages = await Promise.all(
+      messages.map(async (m) => {
+        
+        // 1. Résolution des mentions Utilisateurs (même ceux qui ne sont plus dans le cache message)
+        const userMentions = [];
+        const mentionMatches = m.content.matchAll(/<@!?(\d+)>/g);
+        for (const match of mentionMatches) {
+          const userId = match[1];
+          try {
+            // Cherche dans le cache ou fetch l'utilisateur
+            const member = await guild.members.fetch(userId).catch(() => null);
+            const user = member ? member.user : await client.users.fetch(userId).catch(() => null);
+            
+            if (user) {
+              userMentions.push({
+                id: userId,
+                username: member ? member.displayName : user.username, // Priorité au surnom serveur
+                avatar: user.displayAvatarURL({ dynamic: true })
+              });
+            }
+          } catch (e) {
+            console.warn(`Impossible de résoudre l'user ${userId}`);
+          }
+        }
+
+        // 2. Résolution des mentions Salons
+        const channelMentions = [];
+        const channelMatches = m.content.matchAll(/<#(\d+)>/g);
+        for (const match of channelMatches) {
+          const cId = match[1];
+          const ch = guild.channels.cache.get(cId);
+          if (ch) {
+            channelMentions.push({
+              id: cId,
+              name: ch.name
+            });
+          }
+        }
+
+        return {
+          id: m.id,
+          author: {
+            id: m.author.id, // AJOUT DE L'ID AUTEUR
+            username: m.author.username,
+            avatar: m.author.displayAvatarURL({ format: "png", size: 128 }),
+            bot: m.author.bot,
+          },
+          content: m.content,
+          timestamp: m.createdTimestamp,
+          date: new Date(m.createdTimestamp).toLocaleString("fr-FR", {
+            day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+          }),
+          // On envoie les mentions résolues au front-end
+          mentions: userMentions, 
+          channel_mentions: channelMentions,
+          
+          embeds: m.embeds.map((e) => ({
+            title: e.title,
+            description: e.description,
+            image: e.image?.url,
+            thumbnail: e.thumbnail?.url,
+            color: e.color,
+            url: e.url,
+          })),
+          attachments: m.attachments.map((a) => ({
+            url: a.url,
+            name: a.name,
+            contentType: a.contentType,
+          })),
+        };
+      })
+    );
+
+    cachedMessages = processedMessages.reverse();
+    console.log(`✅ ${cachedMessages.length} messages traités avec mentions résolues`);
+
   } catch (error) {
-    console.error("❌ Erreur récupération messages:", error.message);
-    console.error("Stack:", error.stack);
+    console.error("❌ Erreur fetchMessages:", error);
   }
 }
 
 // ========== ÉVÉNEMENTS DISCORD ==========
-
-// Bot prêt
 client.once("ready", () => {
-  console.log(`✅ Bot Discord connecté : ${client.user.tag}`);
-  console.log(`📡 Serveurs : ${client.guilds.cache.size}`);
-  
-  // Récupération initiale
+  console.log(`✅ Connecté: ${client.user.tag}`);
   fetchMessages();
-  
-  // Actualiser automatiquement toutes les 10 minutes
   setInterval(fetchMessages, 10 * 60 * 1000);
 });
 
-// Nouveau message créé (actualisation immédiate)
 client.on("messageCreate", (message) => {
   if (message.channelId === CHANNEL_ID) {
-    console.log(`📩 Nouveau message dans le canal surveillé, actualisation...`);
-    fetchMessages();
+    // Petit délai pour laisser le temps aux embeds/cache de se propager
+    setTimeout(fetchMessages, 2000); 
   }
 });
 
-// Gestion des erreurs Discord
-client.on("error", (error) => {
-  console.error("❌ Erreur Discord Client:", error);
-});
-
-// Connexion au bot Discord
-client.login(BOT_TOKEN).catch((err) => {
-  console.error("❌ Impossible de se connecter à Discord:", err);
-  process.exit(1);
-});
+client.login(BOT_TOKEN);
 
 // ========== API EXPRESS ==========
 const app = express();
 
-// CORS configuré pour Spiral-Buddies
-app.use(
-  cors({
-    origin: [
-      "https://www.spiral-buddies.fr",
-      "https://spiral-buddies.fr",
-      "https://spiral-buddies.youbieflix.synology.me"
-    ],
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: [
+    "https://www.spiral-buddies.fr",
+    "https://spiral-buddies.fr",
+    "https://spiral-buddies.youbieflix.synology.me",
+  ],
+  credentials: true,
+}));
 
-app.use(express.json());
-
-// ========== ROUTES ==========
-
-// Route API principale (pour ton site)
 app.get("/api/messages", (req, res) => {
   res.json({
     success: true,
-    count: cachedMessages.length,
     messages: cachedMessages,
-    lastUpdate: cachedMessages[0]?.timestamp || null,
+    lastUpdate: Date.now()
   });
 });
 
-// Route de diagnostic (page HTML)
-app.get("/", (req, res) => {
-  const uptimeMinutes = Math.floor(process.uptime() / 60);
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="fr">
-    <head>
-      <meta charset="UTF-8">
-      <title>Spiral-Buddies API</title>
-      <style>
-        body { 
-          font-family: Arial, sans-serif; 
-          max-width: 800px; 
-          margin: 50px auto; 
-          padding: 20px;
-          background: #0d1117;
-          color: #c9d1d9;
-        }
-        .status { 
-          padding: 15px; 
-          border-radius: 8px; 
-          margin: 10px 0;
-          background: #161b22;
-          border: 1px solid #30363d;
-        }
-        .ok { color: #3fb950; }
-        .error { color: #f85149; }
-        a { color: #58a6ff; }
-      </style>
-    </head>
-    <body>
-      <h1>🎮 Spiral-Buddies Discord API</h1>
-      
-      <div class="status">
-        <h2>📊 Statut</h2>
-        <p class="${client.user ? 'ok' : 'error'}">
-          Bot Discord : ${client.user ? `✅ ${client.user.tag}` : "❌ Déconnecté"}
-        </p>
-        <p>📦 Messages en cache : <strong>${cachedMessages.length}</strong></p>
-        <p>⏱️ Uptime : <strong>${uptimeMinutes} minutes</strong></p>
-        <p>🕒 Dernière actualisation : ${cachedMessages[0]?.date || "Jamais"}</p>
-      </div>
+app.get("/", (req, res) => res.send("Spiral-Buddies API is Running 🚀"));
 
-      <div class="status">
-        <h2>🔗 Endpoints</h2>
-        <ul>
-          <li><a href="/api/messages">/api/messages</a> - Messages Discord (JSON)</li>
-          <li><a href="/health">/health</a> - Health check</li>
-        </ul>
-      </div>
-
-      <div class="status">
-        <p><small>🚀 Hébergé sur Render.com</small></p>
-      </div>
-    </body>
-    </html>
-  `);
-});
-
-// Health check (pour monitoring Render + keep-alive)
-app.get("/health", (req, res) => {
-  const isHealthy = client.user && cachedMessages.length > 0;
-  
-  res.status(isHealthy ? 200 : 503).json({
-    status: isHealthy ? "ok" : "degraded",
-    bot: client.user ? client.user.tag : "Disconnected",
-    messages: cachedMessages.length,
-    uptime: Math.floor(process.uptime()),
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// 404 pour routes inconnues
-app.use((req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-    availableRoutes: ["/", "/api/messages", "/health"],
-  });
-});
-
-// ========== DÉMARRAGE SERVEUR ==========
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 API Express démarrée`);
-  console.log(`🌐 Port : ${PORT}`);
-  console.log(`🔗 URL locale : http://localhost:${PORT}`);
-  
-  if (process.env.RENDER_EXTERNAL_URL) {
-    console.log(`🌍 URL publique : ${process.env.RENDER_EXTERNAL_URL}`);
-  }
+  console.log(`🚀 Server running on port ${PORT}`);
 });
-
-// ========== KEEP-ALIVE RENDER (ANTI-SLEEP) ==========
-if (process.env.RENDER_EXTERNAL_URL) {
-  const SELF_URL = process.env.RENDER_EXTERNAL_URL;
-  
-  console.log("✅ Keep-alive activé pour Render");
-  
-  // Ping toutes les 10 minutes pour empêcher le sleep
-  setInterval(() => {
-    fetch(`${SELF_URL}/health`)
-      .then((res) => res.json())
-      .then((data) => console.log("✅ Keep-alive ping:", data.status))
-      .catch((err) => console.error("❌ Keep-alive failed:", err.message));
-  }, 10 * 60 * 1000); // 10 minutes
-}
-
-// ========== GESTION DES ERREURS GLOBALES ==========
-process.on("unhandledRejection", (error) => {
-  console.error("❌ Unhandled Promise Rejection:", error);
-});
-
-process.on("uncaughtException", (error) => {
-  console.error("❌ Uncaught Exception:", error);
-  process.exit(1);
-});
-
-// Arrêt propre
-process.on("SIGTERM", () => {
-  console.log("⚠️ SIGTERM reçu, arrêt propre...");
-  client.destroy();
-  process.exit(0);
-});
-
-console.log("✅ Serveur initialisé avec succès");
