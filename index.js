@@ -15,11 +15,10 @@ const PORT = process.env.PORT || 10000;
 // L'adresse brute de ton serveur Hytale (HTTP)
 const HYTALE_MAP_TARGET = 'http://91.197.6.99:42037'; 
 
-// ========== VALIDATION BOT DISCORD ==========
+// ========== VALIDATION VARIABLES ==========
 if (!BOT_TOKEN || !CHANNEL_ID) {
-  console.error("❌ ERREUR : Variables BOT_TOKEN ou CHANNEL_ID manquantes !");
-  // On ne quitte pas le process pour ne pas tuer le proxy si le bot échoue, 
-  // mais le bot ne marchera pas.
+  console.error("⚠️ ATTENTION : Variables BOT_TOKEN ou CHANNEL_ID manquantes.");
+  console.error("Le Bot Discord ne démarrera pas, mais le Proxy Carte restera actif.");
 }
 
 // ========== PARTIE 1 : BOT DISCORD ==========
@@ -43,7 +42,7 @@ async function fetchMessages() {
     
     const processedMessages = await Promise.all(messages.map(async (m) => {
         let content = m.content;
-        // Résolution basique des mentions
+        // Résolution des mentions <@123456> en pseudos
         const mentionMatches = content.match(/<@!?(\d+)>/g);
         if (mentionMatches) {
           for (const mention of mentionMatches) {
@@ -77,13 +76,13 @@ client.once("ready", () => {
   setInterval(fetchMessages, 5 * 60 * 1000); // Mise à jour toutes les 5 min
 });
 
-if (BOT_TOKEN) client.login(BOT_TOKEN);
+if (BOT_TOKEN) client.login(BOT_TOKEN).catch(e => console.error("Erreur Login Bot:", e));
 
 
 // ========== PARTIE 2 : SERVEUR EXPRESS (PROXY) ==========
 const app = express();
 
-// Configuration CORS permissive pour éviter les blocages
+// Configuration CORS
 app.use(cors({ origin: "*" }));
 
 // --- Route API Discord ---
@@ -97,28 +96,23 @@ app.get("/keep-alive", (req, res) => {
 });
 
 // --- PROXY VERS HYTALE (Le cœur du système) ---
-// On intercepte TOUT ce qui n'est pas /api/messages et on l'envoie vers Hytale
+// Redirige tout le reste vers Hytale
 const mapProxy = createProxyMiddleware({
   target: HYTALE_MAP_TARGET,
-  changeOrigin: true, // Important pour tromper le serveur Hytale
-  ws: true,           // CRUCIAL : Active le support WebSocket pour les mises à jour live
-  pathRewrite: {
-    // Pas de réécriture nécessaire ici, on veut tout passer tel quel
-  },
-  router: {
-    // Si besoin de logique complexe, mais ici c'est direct
-  },
+  changeOrigin: true, 
+  ws: true,           // Active les WebSockets (Vital pour la carte)
+  logLevel: 'error',  // Réduit le bruit dans les logs
   onProxyReq: (proxyReq, req, res) => {
-    // Parfois utile pour déboguer
-    // console.log(`[Proxy] ${req.method} ${req.url} -> ${HYTALE_MAP_TARGET}${req.url}`);
+    // Force la connexion en HTTP 1.1 pour éviter des soucis de chunking
+    proxyReq.setHeader('Connection', 'keep-alive');
   },
   onError: (err, req, res) => {
-    console.error('[Proxy] Erreur:', err.message);
-    res.status(500).send('Erreur de connexion à la carte Hytale.');
+    console.error('[Proxy Error]', err.message);
+    res.status(500).send('La carte est en cours de redémarrage ou inaccessible.');
   }
 });
 
-// On applique le proxy sur la racine "/"
+// Applique le proxy sur la racine
 app.use("/", mapProxy);
 
 // Démarrage du serveur
@@ -127,7 +121,7 @@ const server = app.listen(PORT, () => {
   console.log(`🌍 Proxy Carte Hytale actif vers : ${HYTALE_MAP_TARGET}`);
 });
 
-// Important pour les WebSockets : on upgrade manuellement la connexion
+// Gestion manuelle de l'upgrade WebSocket (nécessaire sur certains hébergeurs)
 server.on('upgrade', (req, socket, head) => {
   mapProxy.upgrade(req, socket, head);
 });
@@ -135,13 +129,14 @@ server.on('upgrade', (req, socket, head) => {
 
 // ========== SCRIPT ANTI-SOMMEIL RENDER ==========
 setInterval(() => {
-    // On ping notre propre route keep-alive
-    // Adapte l'URL si tu utilises un domaine perso
-    const myUrl = `https://carte.spiral-buddies.fr/keep-alive`; 
+    // Remplace par ton URL finale Render ou ton domaine perso
+    // ex: https://carte.spiral-buddies.fr/keep-alive
+    // En attendant que ton domaine marche, utilise l'URL Render en .onrender.com
+    const myUrl = `http://localhost:${PORT}/keep-alive`; 
     
     https.get(myUrl, (res) => {
-        // console.log(`⏰ Ping Keep-Alive envoyé (${res.statusCode})`);
+        // Ping silencieux
     }).on('error', (e) => {
-        console.error(`❌ Erreur Keep-Alive: ${e.message}`);
+        // Ignorer les erreurs de ping local
     });
 }, 14 * 60 * 1000); // 14 minutes
