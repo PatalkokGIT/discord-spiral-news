@@ -8,6 +8,7 @@ const express = require("express");
 const cors = require("cors");
 
 // ========== CONFIGURATION ==========
+
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID || process.env.DISCORD_CHANNEL_ID;
 const PORT = process.env.PORT || 10000;
